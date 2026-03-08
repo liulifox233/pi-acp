@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import * as readline from 'node:readline'
+import { platform } from 'node:os'
 
 export class PiRpcSpawnError extends Error {
   /** Underlying spawn error code, e.g. ENOENT, EACCES */
@@ -121,7 +122,9 @@ export class PiRpcProcess {
   }
 
   static async spawn(params: SpawnParams): Promise<PiRpcProcess> {
-    const cmd = params.piCommand ?? 'pi'
+    const isWindows = platform() === 'win32'
+    // On Windows, npm creates pi.cmd; use explicit extension to avoid ENOENT
+    const cmd = params.piCommand ?? (isWindows ? 'pi.cmd' : 'pi')
 
     // Speed/robustness for ACP:
     // - themes are irrelevant in rpc mode and can be noisy/slow to load.
@@ -133,7 +136,8 @@ export class PiRpcProcess {
     const child = spawn(cmd, args, {
       cwd: params.cwd,
       stdio: 'pipe',
-      env: process.env
+      env: process.env,
+      shell: isWindows
     })
 
     // Ensure spawn failures (e.g. ENOENT when pi isn't installed) are surfaced as a
