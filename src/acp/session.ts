@@ -361,6 +361,14 @@ export class PiAcpSession {
           break
         }
 
+        if (ame?.type === 'thinking_delta' && typeof ame.delta === 'string') {
+          this.emit({
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: ame.delta } satisfies ContentBlock
+          })
+          break
+        }
+
         // Surface tool calls ASAP so clients (e.g. Zed) can show a tool-in-use/loading UI
         // while the model is still streaming tool call args.
         if (ame?.type === 'toolcall_start' || ame?.type === 'toolcall_delta' || ame?.type === 'toolcall_end') {
@@ -416,7 +424,7 @@ export class PiAcpSession {
           break
         }
 
-        // (MVP) ignore other delta types (thinking, etc.) for now.
+        // Ignore other delta/event types for now.
         break
       }
 

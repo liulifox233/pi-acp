@@ -71,3 +71,4 @@ For real validation, test with an ACP client (e.g. Zed external agent).
 ## References
 
 - Local ACP repo with protocol documentation and specs: `~/Dev/learning/agent-client-protocol`
+- Local Zed repo `~/Dev/learning/zed/zed`
