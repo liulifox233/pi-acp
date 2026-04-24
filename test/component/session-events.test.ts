@@ -368,6 +368,68 @@ test('PiAcpSession: emits streamed tool locations from pi path args', async () =
   assert.deepEqual((conn.updates[0]!.update as any).locations, [{ path: '/tmp/test.txt' }])
 })
 
+test('PiAcpSession: emits tool_call updates for hosted web search activity', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({
+    type: 'message_update',
+    assistantMessageEvent: {
+      type: 'hostedtool_start',
+      contentIndex: 0,
+      partial: {
+        content: [
+          {
+            type: 'hostedToolActivity',
+            id: 'ws_1',
+            name: 'web_search_call',
+            arguments: { query: 'pi acp' }
+          }
+        ]
+      }
+    }
+  })
+
+  proc.emit({
+    type: 'message_update',
+    assistantMessageEvent: {
+      type: 'hostedtool_end',
+      contentIndex: 0,
+      activity: {
+        type: 'hostedToolActivity',
+        id: 'ws_1',
+        name: 'web_search_call',
+        status: 'completed',
+        summary: 'Hosted web search completed for pi acp.',
+        arguments: { query: 'pi acp' }
+      },
+      partial: { content: [] }
+    }
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.equal(conn.updates.length, 2)
+  assert.equal(conn.updates[0]!.update.sessionUpdate, 'tool_call')
+  assert.equal((conn.updates[0]!.update as any).toolCallId, 'ws_1')
+  assert.equal((conn.updates[0]!.update as any).title, 'web_search')
+  assert.equal((conn.updates[0]!.update as any).status, 'in_progress')
+
+  assert.equal(conn.updates[1]!.update.sessionUpdate, 'tool_call_update')
+  assert.equal((conn.updates[1]!.update as any).toolCallId, 'ws_1')
+  assert.equal((conn.updates[1]!.update as any).status, 'completed')
+  assert.equal((conn.updates[1]!.update as any).content?.[0]?.content?.text, 'Hosted web search completed for pi acp.')
+})
+
 test('PiAcpSession: emits edit tool line when oldText matches uniquely', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()

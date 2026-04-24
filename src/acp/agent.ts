@@ -25,7 +25,16 @@ import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
 import { listPiSessions, findPiSessionFile } from './pi-sessions.js'
 import { normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
-import { toolResultToText } from './translate/pi-tools.js'
+import {
+  hostedActivityArgs,
+  hostedActivityId,
+  hostedActivityTitle,
+  hostedActivityToText,
+  isHostedActivityComplete,
+  isHostedToolActivity,
+  toolNameToKind,
+  toolResultToText
+} from './translate/pi-tools.js'
 import { promptToPiMessage } from './translate/prompt.js'
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
 import { getAgentDir, getEnableSkillCommands, getQuietStartup } from './pi-settings.js'
@@ -872,15 +881,62 @@ export class PiAcpAgent implements ACPAgent {
       }
 
       if (role === 'assistant') {
-        const text = normalizePiAssistantText(m?.content)
-        if (text) {
-          await this.conn.sessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: 'agent_message_chunk',
-              content: { type: 'text', text }
+        if (Array.isArray(m?.content)) {
+          for (const block of m.content) {
+            if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
+              await this.conn.sessionUpdate({
+                sessionId: session.sessionId,
+                update: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: { type: 'text', text: block.text }
+                }
+              })
             }
-          })
+
+            if (isHostedToolActivity(block)) {
+              const toolCallId = hostedActivityId(block) ?? crypto.randomUUID()
+              const status = isHostedActivityComplete(block) ? 'completed' : 'in_progress'
+              const text = hostedActivityToText(block)
+
+              await this.conn.sessionUpdate({
+                sessionId: session.sessionId,
+                update: {
+                  sessionUpdate: 'tool_call',
+                  toolCallId,
+                  title: hostedActivityTitle(block),
+                  kind: 'other',
+                  status,
+                  rawInput: hostedActivityArgs(block),
+                  rawOutput: block
+                }
+              })
+
+              if (text || status === 'completed') {
+                await this.conn.sessionUpdate({
+                  sessionId: session.sessionId,
+                  update: {
+                    sessionUpdate: 'tool_call_update',
+                    toolCallId,
+                    status,
+                    content: text ? [{ type: 'content', content: { type: 'text', text } }] : null,
+                    rawInput: hostedActivityArgs(block),
+                    rawOutput: block
+                  }
+                })
+              }
+            }
+          }
+        } else {
+          const text = normalizePiAssistantText(m?.content)
+          if (text) {
+            await this.conn.sessionUpdate({
+              sessionId: session.sessionId,
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text }
+              }
+            })
+          }
         }
       }
 
@@ -896,7 +952,7 @@ export class PiAcpAgent implements ACPAgent {
             sessionUpdate: 'tool_call',
             toolCallId,
             title: toolName,
-            kind: toolName === 'read' ? 'read' : toolName === 'write' || toolName === 'edit' ? 'edit' : 'other',
+            kind: toolNameToKind(toolName),
             status: 'completed',
             rawInput: null,
             rawOutput: m

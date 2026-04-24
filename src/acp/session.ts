@@ -4,8 +4,7 @@ import type {
   McpServer,
   SessionUpdate,
   ToolCallContent,
-  ToolCallLocation,
-  ToolKind
+  ToolCallLocation
 } from '@agentclientprotocol/sdk'
 import { RequestError } from '@agentclientprotocol/sdk'
 import { maybeAuthRequiredError } from './auth-required.js'
@@ -13,7 +12,15 @@ import { readFileSync } from 'node:fs'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { PiRpcProcess, PiRpcSpawnError, type PiRpcEvent } from '../pi-rpc/process.js'
 import { SessionStore } from './session-store.js'
-import { toolResultToText } from './translate/pi-tools.js'
+import {
+  hostedActivityArgs,
+  hostedActivityId,
+  hostedActivityTitle,
+  hostedActivityToText,
+  isHostedActivityComplete,
+  toolNameToKind,
+  toolResultToText
+} from './translate/pi-tools.js'
 import { expandSlashCommand, type FileSlashCommand } from './slash-commands.js'
 
 type SessionCreateParams = {
@@ -394,6 +401,63 @@ export class PiAcpSession {
           break
         }
 
+        if (ame?.type === 'hostedtool_start' || ame?.type === 'hostedtool_end') {
+          const activity =
+            (ame as any)?.activity ??
+            (ame as any)?.partial?.content?.[(ame as any)?.contentIndex ?? 0]
+
+          const toolCallId = hostedActivityId(activity)
+          if (!toolCallId) break
+
+          const title = hostedActivityTitle(activity)
+          const rawInput = hostedActivityArgs(activity)
+          const isComplete = ame?.type === 'hostedtool_end' && isHostedActivityComplete(activity)
+          const status = isComplete ? 'completed' : 'in_progress'
+          const contentText = ame?.type === 'hostedtool_end' ? hostedActivityToText(activity) : ''
+
+          if (!this.currentToolCalls.has(toolCallId)) {
+            if (!isComplete) this.currentToolCalls.set(toolCallId, 'in_progress')
+            this.emit({
+              sessionUpdate: 'tool_call',
+              toolCallId,
+              title,
+              kind: 'other',
+              status,
+              rawInput
+            })
+
+            if (isComplete || contentText) {
+              this.emit({
+                sessionUpdate: 'tool_call_update',
+                toolCallId,
+                status,
+                content: contentText
+                  ? ([{ type: 'content', content: { type: 'text', text: contentText } }] satisfies ToolCallContent[])
+                  : undefined,
+                rawInput,
+                rawOutput: activity
+              })
+            }
+          } else {
+            this.emit({
+              sessionUpdate: 'tool_call_update',
+              toolCallId,
+              status,
+              content: contentText
+                ? ([{ type: 'content', content: { type: 'text', text: contentText } }] satisfies ToolCallContent[])
+                : undefined,
+              rawInput,
+              rawOutput: activity
+            })
+          }
+
+          if (isComplete) {
+            this.currentToolCalls.delete(toolCallId)
+          }
+
+          break
+        }
+
         // Surface tool calls ASAP so clients (e.g. Zed) can show a tool-in-use/loading UI
         // while the model is still streaming tool call args.
         if (ame?.type === 'toolcall_start' || ame?.type === 'toolcall_delta' || ame?.type === 'toolcall_end') {
@@ -431,7 +495,7 @@ export class PiAcpSession {
                 sessionUpdate: 'tool_call',
                 toolCallId,
                 title: toolName,
-                kind: toToolKind(toolName),
+                kind: toolNameToKind(toolName),
                 status,
                 locations,
                 rawInput
@@ -488,7 +552,7 @@ export class PiAcpSession {
             sessionUpdate: 'tool_call',
             toolCallId,
             title: toolName,
-            kind: toToolKind(toolName),
+            kind: toolNameToKind(toolName),
             status: 'in_progress',
             locations,
             rawInput: args
@@ -669,21 +733,4 @@ function formatAutoRetryMessage(ev: PiRpcEvent): string {
   if (delayMs > 0 && delaySeconds === 0) delaySeconds = 1
 
   return `Retrying (attempt ${attempt}/${maxAttempts}, waiting ${delaySeconds}s)...`
-}
-
-function toToolKind(toolName: string): ToolKind {
-  switch (toolName) {
-    case 'read':
-      return 'read'
-    case 'write':
-    case 'edit':
-      return 'edit'
-    case 'bash':
-      // Many ACP clients render `execute` tool calls only via the terminal APIs.
-      // Since this adapter lets pi execute locally (no client terminal delegation),
-      // we report bash as `other` so clients show inline text output blocks.
-      return 'other'
-    default:
-      return 'other'
-  }
 }
